@@ -1,133 +1,273 @@
-import pandas as pd
-from mysql.connector import connect, Error
+from dash import Dash, html, dcc, Input, Output, dash_table, State
+import plotly.express as px
+from conexion_base import DataBase
 
-class DataBase:
-    def __init__(self):
-        self.connection = connect(
-            host="localhost",
-            user="root",
-            password="12345678",
-            database="OFERTAS_MERCADOLIBRE",
+import dash_bootstrap_components as dbc
+
+app = Dash(__name__, suppress_callback_exceptions=True)
+
+# Instancia de la base de datos
+db = DataBase()
+
+# Obtener datos iniciales
+data = db.obtener_datos()
+
+# Crear el layout de la barra lateral
+sidebar = html.Div(
+    [
+        html.H2("Mercado Libre", style={"color": "white", "text-align": "center", "margin-bottom": "20px"}),
+        html.Hr(),
+        html.Button("Dashboard 1", id="btn-dashboard1", n_clicks=0,
+                    style={"color": "white", "text-decoration": "none", "padding": "10px", "background-color": "#6c757d", "border": "none", "width": "100%", "text-align": "left", "border-radius": "5px", "margin-bottom": "10px"}),
+        html.Br(),
+        html.Button("Dashboard 2", id="btn-dashboard2", n_clicks=0,
+                    style={"color": "white", "text-decoration": "none", "padding": "10px", "background-color": "#6c757d", "border": "none", "width": "100%", "text-align": "left", "border-radius": "5px", "margin-bottom": "10px"}),
+    ],
+    style={"position": "fixed", "top": 0, "left": 0, "bottom": 0, "width": "15rem", "padding": "2rem 1rem", "background-color": "#333"},
+)
+
+# Crear el layout principal
+app.layout = html.Div([
+    dcc.Location(id='url', refresh=False),
+    sidebar,
+    html.Div(id='page-content', style={"margin-left": "16rem", "padding": "2rem"}),
+    dcc.Store(id='selected-tipo-envio')  # Store to hold selected tipo envio
+])
+
+# callback para cambiar entre dashboards
+@app.callback(Output('page-content', 'children'),
+              [Input('url', 'pathname')])
+def display_page(pathname):
+    try:
+        if pathname == '/dashboard1':
+            return dashboard1_layout()
+        elif pathname == '/dashboard2':
+            return dashboard2_layout()
+        else:
+            return dashboard1_layout()
+    except Exception as e:
+        return html.Div(f"Error: {str(e)}")
+
+@app.callback(Output('url', 'pathname'),
+              [Input('btn-dashboard1', 'n_clicks'),
+               Input('btn-dashboard2', 'n_clicks')])
+def update_pathname(btn1_clicks, btn2_clicks):
+    if btn1_clicks > btn2_clicks:
+        return '/dashboard1'
+    else:
+        return '/dashboard2'
+
+def dashboard1_layout():
+    with DataBase() as db:
+        data_descuento = db.obtener_datos_vista_descuento()
+        data_baratos = db.obtener_datos_vista_baratos()
+        data_productos = db.obtener_datos_vista_productos()
+        df_combinado4 = db.countEnvios()
+
+        tipos_descuento = data_descuento['Tipo'].unique()
+        tipos_disponibles_descuento = [tipo for tipo in tipos_descuento if tipo in data['Tipo'].unique()]
+
+        envios_baratos = data_baratos['Envio'].unique()
+        envios_disponibles_baratos = [envio for envio in envios_baratos if envio in data['Envio'].unique()]
+
+        dropdown_descuento = dcc.Dropdown(
+            id='tipo-dropdown-descuento',
+            options=[{'label': 'Todas', 'value': 'Todas'}] + [{'label': tipo, 'value': tipo} for tipo in tipos_disponibles_descuento],
+            value='Todas'
         )
-        self.cursor = self.connection.cursor()
+
+        dropdown_baratos = dcc.Dropdown(
+            id='envio-dropdown-baratos',
+            options=[{'label': 'Todos', 'value': 'Todos'}] + [{'label': envio, 'value': envio} for envio in envios_disponibles_baratos],
+            value='Todos'
+        )
+
+        fig_descuento = px.bar(data_descuento, x='Nombre', y='Precio', color='Tipo',
+                               title='PRODUCTOS CON DESCUENTO',
+                               labels={'Nombre': 'Producto', 'Precio': 'Precio'},
+                               color_discrete_map={tipo: px.colors.qualitative.Set1[i] for i, tipo in enumerate(tipos_disponibles_descuento)}
+                               )
+
+        fig_baratos = px.bar(data_baratos, x='Nombre', y='Precio', color='Envio',
+                             title='PRODUCTOS MÁS BARATOS',
+                             labels={'Nombre': 'Producto', 'Precio': 'Precio'},
+                             color_discrete_map={envio: px.colors.qualitative.Set1[i] for i, envio in enumerate(envios_disponibles_baratos)}
+                             )
+
+        fig_pie = px.pie(data_productos, names='Tipo', values='cantidad_productos', title='DISTRIBUCIÓN DE PRODUCTOS POR TIPO DE OFERTA')
+
+        figPie2 = px.pie(df_combinado4, title='Productos por Envio', names='Envio', values='Cantidad_Productos')
+
+    return html.Div([
+        html.H2("Dashboard 1", style={"color": "black"}),
+
+        html.Div([
+            html.Label("Select Product Type (Discount):"),
+            dropdown_descuento,
+            dcc.Graph(figure=fig_descuento, id='precio-graph-descuento'),
+        ], style={'width': '100%', 'display': 'inline-block'}),
+
+        html.Div([
+            dcc.Graph(figure=fig_pie, id='tipo-graph-pie'),
+        ], style={'width': '50%', 'display': 'inline-block', 'float': 'right'}),
+
+        html.Div([
+            dcc.Graph(figure=figPie2, id='tipo-graph-pie'),
+        ], style={'width': '50%', 'float': 'center'}),
+
+        html.Div([
+            html.Label("Select Shipping Type (Cheap):"),
+            dropdown_baratos,
+            dcc.Graph(figure=fig_baratos, id='precio-graph-baratos'),
+        ], style={'width': '100%', 'display': 'inline-block', 'float': 'center'}),
+
+    ], id='dashboard1-content')
+
+@app.callback(
+    [Output('precio-graph-descuento', 'figure'),
+     Output('precio-graph-baratos', 'figure')],
+    [Input('tipo-dropdown-descuento', 'value'),
+     Input('envio-dropdown-baratos', 'value')],
+    prevent_initial_call=True
+)
+def update_graph_descuento(selected_tipo_descuento, selected_envio_baratos):
+    with DataBase() as db:
+        data_descuento = db.obtener_datos_vista_descuento()
+        data_baratos = db.obtener_datos_vista_baratos()
+
+        if selected_tipo_descuento == 'Todas':
+            filtered_data_descuento = data_descuento
+        else:
+            filtered_data_descuento = data_descuento[data_descuento['Tipo'] == selected_tipo_descuento]
+
+        tipos_disponibles_descuento = filtered_data_descuento['Tipo'].unique()
+
+        fig_descuento = px.bar(
+            filtered_data_descuento,
+            x='Nombre',
+            y='Precio',
+            color='Tipo',
+            title=f'PRODUCTOS CON MAYOR DESCUENTO',
+            labels={'Nombre': 'Producto', 'Precio': 'Precio'},
+            color_discrete_map={
+                tipo: px.colors.qualitative.Set1[i] for i, tipo in enumerate(tipos_disponibles_descuento)
+            }
+        )
+
+        if selected_envio_baratos == 'Todos':
+            filtered_data_baratos = data_baratos
+        else:
+            filtered_data_baratos = data_baratos[data_baratos['Envio'] == selected_envio_baratos]
+
+        envios_disponibles_baratos = filtered_data_baratos['Envio'].unique()
+
+        fig_baratos = px.bar(
+            filtered_data_baratos,
+            x='Nombre',
+            y='Precio',
+            color='Envio',
+            title=f'PRODUCTOS MÁS BARATOS ',
+            labels={'Nombre': 'Producto', 'Precio': 'Precio'},
+            color_discrete_map={
+                envio: px.colors.qualitative.Set1[i] for i, envio in enumerate(envios_disponibles_baratos)
+            }
+        )
+
+    return fig_descuento, fig_baratos
+
+def dashboard2_layout():
+    with DataBase() as db:
+        df_combinado = db.obtener_datos_descuento2()
+        df_combinado2 = db.obtenerPreciosDesc()
+        df_combinado3 = db.top5Desc()
+        df_combinado5 = db.top10Asc()
 
 
-    def create_table(self):
-        crear_tabla_query = """
-        CREATE TABLE IF NOT EXISTS ofertas_mercado (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            Nombre VARCHAR(255),
-            Precio DECIMAL(10, 2),
-            Descuento VARCHAR(50),
-            Tipo VARCHAR(50),
-            Envio VARCHAR(50)
-        );
-        """
-        self.cursor.execute(crear_tabla_query)
-        self.connection.commit()
 
-    def __enter__(self):
-        self.cursor = self.connection.cursor()
-        return self
+        # Crear la lista de opciones para el dropdown
+        opciones_porcentajes = df_combinado['rango_descuento'].unique()
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.connection.close()
+        # Crear la figura de Plotly Express con el primer porcentaje
+        porcentaje_inicial = opciones_porcentajes[0]
+        fig_descuento = px.bar(df_combinado, x='Envio', y='cantidad_productos',
+                               title=f'Distribución de Descuentos para {porcentaje_inicial}',
+                               labels={'Envio': 'Tipo de Envío', 'cantidad_productos': 'Cantidad de Productos'},
+                               color='Envio',
+                               color_discrete_map={tipo: px.colors.qualitative.Set1[i] for i, tipo in enumerate(df_combinado['Envio'].unique())}
+                               )
 
-    def insert_data(self, archivo_csv):
-        try:
-            df = pd.read_csv(archivo_csv, index_col=0)
-
-            # Manejar valores nulos en el DataFrame
-            df.fillna('', inplace=True)
-
-            for index, row in df.iterrows():
-                insertar_query = """
-                INSERT INTO ofertas_mercado(Nombre, Precio, Descuento, Tipo, Envio)
-                VALUES (%s, %s, %s, %s, %s)
-                """
-                values = (
-                    str(row['Nombre']),
-                    float(row['Precio'].replace(',', '')),
-                    str(row['Descuento']),
-                    str(row['Tipo']),
-                    str(row['Envio'])
-                )
-                self.cursor.execute(insertar_query, values)
-
-            self.connection.commit()
-            print("Datos insertados correctamente en la tabla.")
-        except Error as e:
-            print(f"Error al insertar datos: {e}")
-            raise
-
-    def obtener_datos(self):
-        query = "SELECT * FROM ofertas_mercado"
-        db = DataBase()
-        result = pd.read_sql_query(query, db.connection)
-        return result
-
-    def obtener_datos_vista_descuento(self):
-        query = "SELECT * FROM vista_descuento;"
-        result = pd.read_sql_query(query, self.connection)
-        return result
-
-    def obtener_datos_vista_baratos(self):
-        query = "SELECT * FROM vista_baratos;"
-        result = pd.read_sql_query(query, self.connection)
-        return result
-
-    def obtener_datos_vista_productos(self):
-        query = "SELECT * FROM productosxtipo;"
-        result = pd.read_sql_query(query,self.connection)
-        return result
-
-    def obtener_datos_descuento2(self):
-        query = 'SELECT rango_descuento, Envio, cantidad_productos FROM vista_descuentos2;'
-        result = pd.read_sql(query, self.connection)
-        return result
-
-    def obtenerPreciosDesc(self):
-        query = 'SELECT Nombre, Precio, Descuento FROM ofertas_mercado;'
-        result = pd.read_sql(query, self.connection)
-        return result
-
-    def top5Desc(self):
-        query = 'SELECT Nombre, Precio, Descuento, Tipo FROM ofertas_mercado ORDER BY CAST(Descuento AS DECIMAL(5,2)) DESC LIMIT 10;'
-        result = pd.read_sql(query, self.connection)
-        return result
-
-    def countEnvios(self):
-        query = 'SELECT Envio, COUNT(*) as Cantidad_Productos FROM ofertas_mercado GROUP BY Envio;'
-        result = pd.read_sql_query(query, self.connection)
-        return result
-
-    def top10Asc(self):
-        query = 'SELECT Nombre, Precio, Descuento, Tipo FROM ofertas_mercado ORDER BY CAST(Descuento AS DECIMAL(5,2)) ASC LIMIT 10;'
-        result = pd.read_sql_query(query, self.connection)
-        return result
-
-    def descAsc(self):
-        query = 'SELECT Descuento, COUNT(*) as Cantidad_Productos FROM vista_ofertas_descuento GROUP BY Descuento ORDER BY CAST(Descuento AS DECIMAL(5,2)) ASC LIMIT 10;'
-        result = pd.read_sql(query, self.connection)
-        return result
+        figPrecioDesc = px.scatter(df_combinado2, x='Descuento', y='Precio', title='Diagrama de Dispersión',
+                         labels={'Precio': 'Precio', 'Descuento': 'Descuento'}, hover_data=['Nombre'], color='Descuento',
+                                   color_continuous_scale='Virdis')
 
 
-    def cerrar_conexion(self):
-        self.cursor.close()
-        self.connection.close()
+    # Diseño de la aplicación
+        return html.Div([
+            html.H2("Dashboard 2", style={"color": "black"}),
+            html.P("Contenido del segundo dashboard"),
+            # Dropdown para seleccionar el porcentaje de descuento
+            html.Label("Seleccionar Porcentaje de Descuento:"),
+            dcc.Dropdown(
+                id='dropdown-porcentaje',
+                options=[{'label': 'ALL', 'value': 'ALL'}] + [{'label': porcentaje, 'value': porcentaje} for porcentaje in opciones_porcentajes],
+                value=porcentaje_inicial
+            ),
+            dcc.Graph(figure=fig_descuento, id='descuento-graph'),
+
+            html.Div([
+                html.H2("Top 10 Productos con Mayores Descuentos", style={"color": "black"}),
+
+                html.Div([ html.Table( [html.Tr([html.Th(col) for col in df_combinado3.columns])] +
+                        [html.Tr([html.Td(df_combinado3.iloc[i][col]) for col in df_combinado3.columns]) for i in
+                         range(len(df_combinado3))]
+                    ),
+                ], style={'overflowX': 'auto', 'width':'50%', 'float':'left', 'display': 'inline-block'})]),
+
+            html.Div([
+                html.H2("Top 10 Productos con Menor Descuentos", style={"color": "black"}),
+
+                html.Div([html.Table([html.Tr([html.Th(col) for col in df_combinado5.columns])] +
+                                     [html.Tr([html.Td(df_combinado5.iloc[i][col]) for col in df_combinado5.columns])
+                                      for i in
+                                      range(len(df_combinado5))]
+                                     ),
+                          ], style={'overflowX': 'auto', 'width': '50%', 'float': 'center', 'display': 'inline-block'}),
+            ]),
+
+                html.Div([
+                dcc.Graph(figure=figPrecioDesc , id='tipo-graph-pie'),
+            ], style={'width': '100%', 'display': 'inline-block', 'float': 'center'}),
+        ])
+
+
+@app.callback(
+    Output('descuento-graph', 'figure'),
+    [Input('dropdown-porcentaje', 'value')]
+)
+def actualizar_grafico(porcentaje_seleccionado):
+    with DataBase() as db:
+        df_combinado = db.obtener_datos_descuento2()
+
+        # Filtrar el DataFrame según el porcentaje seleccionado
+    if porcentaje_seleccionado == 'ALL':
+        df_filter = df_combinado
+        title_text = 'Distribución de Descuentos para TODOS los Porcentajes'
+    else:
+        df_filter = df_combinado[df_combinado['rango_descuento'] == porcentaje_seleccionado]
+        title_text = f'Distribución de Descuentos para {porcentaje_seleccionado}'
+
+    tipos_disponibles_descuento = df_combinado['Envio'].unique()
+
+    nueva_figura = px.bar(df_filter, x='Envio', y='cantidad_productos',
+                          title=title_text,
+                          labels={'Envio': 'Tipo de Envío', 'cantidad_productos': 'Cantidad de Productos'},
+                          color='Envio',
+                          color_discrete_map={tipo: px.colors.qualitative.Set1[i] for i, tipo in
+                                              enumerate(tipos_disponibles_descuento)}
+                          )
+
+    return nueva_figura
+
 
 if __name__ == "__main__":
-    # Crear una instancia de la clase DataBase
-    db = DataBase()
-
-    try:
-        # Crear la tabla (si no existe)
-        db.create_table()
-
-        # Insertar datos desde un archivo CSV
-        archivo_csv = "proyecto.csv"
-        db.insert_data(archivo_csv)
-
-    finally:
-        # Cerrar la conexión
-        db.cerrar_conexion()
+    app.run_server(debug=True)
